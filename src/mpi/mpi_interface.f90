@@ -18,677 +18,801 @@
 ! and TV Singh, Academic and Technology Services
 !----------------------------------------------------------------------------
 !
-module mpi_interface
+MODULE mpi_interface
 
-  use mpi
-  implicit none
-  !
-  !    nxg = nxpg-4
-  !    nyg = nypg-4
-  !    xcomm, commxid - communicator for x side processors and rank wrt it
-  !    ycomm, commyid - communicator for y side processors and rank wrt it
-  !    nxnzp = nx*nzp
-  !    nynzp = ny*nzp
-  !    wrxid, wryid, nxprocs,nyprocs: (wrxid,wryid)=myid in
-  !        ranktable (nxprocs,nyprocs)
-  !    nxpa,nypa: arrays containing nxp and nyp for all nxprocs and nyprocs
-  !         respectively
-  !    nynza, nxnza: arrays containing nynzp and nxnzp on nxprocs and nyprocs
-  !         respectively
-  !
+   USE mpi
+   IMPLICIT NONE
+   
+   ! Juha: Some interfaces for communication subroutines; Makes it also easier to set corresponding
+   !       dummy subroutines in seq_interface.f90 to avoid hairy looking tests in the main source code 
+   !       whether MPI is used or not. Another option of course would be to use compiler directives,
+   !       maye future work? However it will make the source code again a bit more messy.
+   INTERFACE broadcast
+      MODULE PROCEDURE broadcastRealArray1d, broadcastRealArray3d, broadcastInteger
+   END INTERFACE broadcast
 
-  integer :: myid, pecount, nxpg, nypg, nxg, nyg, nbytes, intsize, &
-       MY_SIZE, MY_CMPLX
-  integer :: xcomm, ycomm,commxid,commyid
-  integer :: nxnzp,nynzp,fftinix,fftiniy
-  integer :: wrxid, wryid, nxprocs, nyprocs
-  integer, allocatable, dimension(:) :: xoffset, yoffset, nxpa, nypa, &
-       nynza, nxnza
+   INTERFACE get_max_root
+      MODULE PROCEDURE get_scalar_integer_global_max_root
+   END INTERFACE get_max_root
 
-  ! these are the parameters used in the alltoallw2 call in the fft
+   INTERFACE get_sum_root
+      MODULE PROCEDURE get_scalar_float_global_sum_root,    &
+                       get_scalar_integer_global_sum_root,  &
+                       get_1d_float_global_sum_root,        &
+                       get_1d_integer_global_sum_root,      &
+                       get_2d_float_global_sum_root
+   END INTERFACE get_sum_root
+   
+   
+   !
+   !    nxg = nxpg-4
+   !    nyg = nypg-4
+   !    xcomm, commxid - communicator for x side processors and rank wrt it
+   !    ycomm, commyid - communicator for y side processors and rank wrt it
+   !    nxnzp = nx*nzp
+   !    nynzp = ny*nzp
+   !    wrxid, wryid, nxprocs,nyprocs: (wrxid,wryid)=myid in
+   !        ranktable (nxprocs,nyprocs)
+   !    nxpa,nypa: arrays containing nxp and nyp for all nxprocs and nyprocs
+   !         respectively
+   !    nynza, nxnza: arrays containing nynzp and nxnzp on nxprocs and nyprocs
+   !         respectively
+   !
 
-  integer, allocatable, dimension(:,:) :: ranktable,xtype,ytype,xdisp,&
-       ydisp,xcount,ycount
+   INTEGER, PARAMETER :: mpiroot = 0 ! root process defined as rank 0
+   INTEGER :: REAL_SIZE, INT_SIZE, MY_REAL, MY_CMPLX
+   INTEGER :: myid, pecount, nxpg, nypg, nxg, nyg, nbytes
+   INTEGER :: xcomm, ycomm,commxid,commyid
+   INTEGER :: nxnzp,nynzp,fftinix,fftiniy
+   INTEGER :: wrxid, wryid, nxprocs, nyprocs
+   INTEGER, ALLOCATABLE, DIMENSION(:) :: xoffset, yoffset, nxpa, nypa, &
+                                         nynza, nxnza
 
-  integer :: stridetype,xstride,ystride,xystride,xylarry,xyzlarry,&
-       fxytype,fxyztype
+   ! these are the parameters used in the alltoallw call in the fft
 
-  integer ierror
+   INTEGER, ALLOCATABLE, DIMENSION(:,:) :: ranktable,xtype,ytype,xdisp,&
+                                           ydisp,xcount,ycount
 
-contains
-  !
-  !----------------------------------------------------------------------
-  ! INIT_MP: Initializes MPI
-  !
-  subroutine init_mpi
+   INTEGER :: stridetype,xstride,ystride,xystride,xylarry,xyzlarry,&
+              fxytype,fxyztype
 
-    character (len=8) date
+   CHARACTER(len=80) :: ver='', author=''
+   ! Additional, e.g. case specific, information
+   CHARACTER(len=180), PARAMETER :: info=''
 
-    call mpi_init(ierror)
-    call mpi_comm_size(MPI_COMM_WORLD, pecount, ierror)
-    call mpi_comm_rank(MPI_COMM_WORLD, myid, ierror)
+CONTAINS
+   !
+   !----------------------------------------------------------------------
+   ! INIT_MP: Initializes MPI
+   !
+   SUBROUTINE init_mpi
 
-    select case (kind(0.0))
-    case (4)
-       nbytes = 4
-       MY_SIZE = MPI_REAL
-       MY_CMPLX = MPI_COMPLEX
-    case (8)
-       nbytes = 8
-       MY_SIZE = MPI_DOUBLE_PRECISION
-       MY_CMPLX = MPI_doUBLE_COMPLEX
-    case default
-       stop "kind not supported"
-    end select
+      INTEGER :: ierror
+      CHARACTER (len=8) :: date
 
-    select case(kind(0))
-    case (4)
-       intsize=4
-    case (8)
-       intsize=8
-    case default
-       stop "int kind not supported"
-    end select
-    !
-    call date_and_time(date)
-    if (myid == 0) print "(/1x,75('-'),/2x,A13,A8,/2x,A15,I2,A15,I2,A14)", &
-         'UCLA LES 2.0 ',date, 'Computing using',nbytes,' byte reals and', &
-         intsize," byte integers"
+      CALL mpi_init(ierror)
+      CALL mpi_comm_size(MPI_COMM_WORLD, pecount, ierror)
+      CALL mpi_comm_rank(MPI_COMM_WORLD, myid, ierror)
 
-  end subroutine init_mpi
-  !
-  !----------------------------------------------------------------------
-  ! DEFINE_DECOMP: Defines MPI Decomposition
-  !
-  subroutine define_decomp(nxp, nyp, nxpart)
+      SELECT CASE (kind(0.0))
+         CASE (4)
+            nbytes = 4
+            CALL MPI_TYPE_SIZE(MPI_REAL, REAL_SIZE, ierror)                        
+            MY_REAL = MPI_REAL
+            MY_CMPLX = MPI_COMPLEX
+         CASE (8)
+            nbytes = 8
+            CALL MPI_TYPE_SIZE(MPI_DOUBLE_PRECISION, REAL_SIZE, ierror)            
+            MY_REAL = MPI_DOUBLE_PRECISION
+            MY_CMPLX = MPI_DOUBLE_COMPLEX
+         CASE DEFAULT
+            STOP "kind not supported"
+      END SELECT
 
-    integer, intent(inout) :: nxp, nyp
-    logical, intent(in) ::  nxpart
+      SELECT CASE(kind(0))
+         CASE (4)
+            CALL MPI_TYPE_SIZE(MPI_INTEGER, INT_SIZE, ierror)
+         CASE DEFAULT
+            STOP "int kind not supported"
+      END SELECT
+      !
+      CALL date_and_time(date)
+      IF (myid == 0) PRINT "(/1x,75('-'),/2x,A22,/2x,A15,I2,A15,I2,A14)", &
+         'UCLALES-SALSA '//date, 'Computing using',REAL_SIZE,' byte REALs and', &
+         INT_SIZE," byte INTEGERs"
+      IF (myid == 0 .AND. len(info) > 0) PRINT *, ' '//trim(info)
 
-    integer :: ierror, i,j, modx,mody, nxpj, nypj, irank
-    integer :: worldgroup, xgroup, ygroup
+   END SUBROUTINE init_mpi
+   !
+   !----------------------------------------------------------------------
+   ! DEFINE_DECOMP: Defines MPI Decomposition
+   !
+   SUBROUTINE define_decomp(nxp, nyp, nxpart)
 
-    nxprocs=1
-    nyprocs=pecount
-    if (nyp .gt. nxp) then
-       nyprocs=pecount
-       nxprocs=1
-       if( (nyp-4)/nyprocs.lt.5 .or. nxpart) then
-          nyprocs=int(sqrt(real(pecount)))
-          nxprocs=pecount/nyprocs
-          do while (nyprocs*nxprocs .ne. pecount .and. mod(nxprocs,nxp-4) == 0 .and. mod(nyprocs,nyp-4) == 0)
-             nyprocs=nyprocs+1
-             nxprocs=pecount/nyprocs
-          end do
+      INTEGER, INTENT(inout) :: nxp, nyp
+      LOGICAL, INTENT(in)    :: nxpart
 
-          if(nxprocs.gt.nyprocs)then
-             i=nxprocs
-             nxprocs=nyprocs
-             nyprocs=i
-          endif
+      INTEGER :: ierror, i,j, modx,mody, nxpj, nypj, irank
+      INTEGER :: worldgroup, xgroup, ygroup
 
-          if(nxp .lt. 5) then
-             print *, 'ABORTING: NXP too small, increase to at least 5'
-             call mpi_abort(MPI_COMM_WORLD,0,ierror)
-          elseif( (nxp-4)/nxprocs .le. 5) then
-             nxprocs=1
-             nyprocs=pecount
-          endif
+      nxprocs = 1
+      nyprocs = pecount
+      IF (nyp > nxp) THEN
+         nyprocs = pecount
+         nxprocs = 1
+         IF( (nyp-4)/nyprocs < 5 .OR. nxpart) THEN
+            nyprocs = int(sqrt(REAL(pecount)))
+            nxprocs = pecount/nyprocs
+            DO WHILE (nyprocs*nxprocs /= pecount)
+               nyprocs = nyprocs+1
+               nxprocs = pecount/nyprocs
+            END DO
 
-          if ( (nyp-4)/nyprocs .lt. 5) then
-             print *, '  ABORTING: NYP too small for ',nyprocs,' processors.'
-             print *, '  Increase to ',nyprocs*9, ' or run on ',nypg/9,       &
+            IF(nxprocs > nyprocs)then
+               i = nxprocs
+               nxprocs = nyprocs
+               nyprocs = i
+            END IF
+
+            IF(nxp < 5) THEN
+               PRINT *, 'ABORTING: NXP too small, increase to at least 5'
+               CALL mpi_abort(MPI_COMM_WORLD,0,ierror)
+            ELSE IF( (nxp-4)/nxprocs <= 5) THEN
+               nxprocs = 1
+               nyprocs = pecount
+            END IF
+
+            IF ( (nyp-4)/nyprocs < 5) THEN
+               PRINT *, '  ABORTING: NYP too small for ',nyprocs,' processors.'
+               PRINT *, '  Increase to ',nyprocs*9, ' or run on ',nypg/9,       &
                   ' or fewer processors'
-             call mpi_abort(MPI_COMM_WORLD,0,ierror)
-          endif
-       endif
+               CALL mpi_abort(MPI_COMM_WORLD,0,ierror)
+            END IF
+         END IF
 
-    else
+      ELSE
 
-       nxprocs=pecount
-       nyprocs=1
-       if( (nxp-4)/nxprocs.lt.5 .or. nxpart) then
-          nxprocs=int(sqrt(real(pecount)))
-          nyprocs=pecount/nxprocs
-          do while (nyprocs*nxprocs .ne. pecount .and. mod(nxprocs,nxp-4) == 0 .and. mod(nyprocs,nyp-4) == 0)
-             nxprocs=nxprocs+1
-             nyprocs=pecount/nxprocs
-          end do
+         nxprocs = pecount
+         nyprocs = 1
+         IF( (nxp-4)/nxprocs < 5 .OR. nxpart) THEN
+            nxprocs = int(sqrt(REAL(pecount)))
+            nyprocs = pecount/nxprocs
 
-          if(nyprocs.gt.nxprocs)then
-             i=nyprocs
-             nyprocs=nxprocs
-             nxprocs=i
-          endif
+            DO WHILE (nyprocs*nxprocs /= pecount)
+               nxprocs = nxprocs+1
+               nyprocs = pecount/nxprocs
+            END DO
 
-          if(nyp .lt. 5) then
-             print *, 'ABORTING: NYP too small, increase to at least 5'
-             call mpi_abort(MPI_COMM_WORLD,0,ierror)
-          elseif( (nyp-4)/nyprocs.le. 5) then
-             nyprocs=1
-             nxprocs=pecount
-          endif
+            IF(nyprocs > nxprocs)then
+               i = nyprocs
+               nyprocs = nxprocs
+               nxprocs = i
+            END IF
 
-          if ( (nxp-4)/nxprocs .lt. 5) then
-             print *, '  ABORTING: NXP too small for ',nxprocs,' processors.'
-             print *, '  Increase to ',nxprocs*9, ' or run on ',nxpg/9,       &
+            IF(nyp < 5) THEN
+               PRINT *, 'ABORTING: NYP too small, increase to at least 5'
+               CALL mpi_abort(MPI_COMM_WORLD,0,ierror)
+            ELSE IF( (nyp-4)/nyprocs <= 5) THEN
+               nyprocs = 1
+               nxprocs = pecount
+            END IF
+
+            IF ( (nxp-4)/nxprocs < 5) THEN
+               PRINT *, '  ABORTING: NXP too small for ',nxprocs,' processors.'
+               PRINT *, '  Increase to ',nxprocs*9, ' or run on ',nxpg/9,       &
                   ' or fewer processors'
-             call mpi_abort(MPI_COMM_WORLD,0,ierror)
-          endif
-       endif
-    endif
+               CALL mpi_abort(MPI_COMM_WORLD,0,ierror)
+            END IF
+         END IF
+      END IF
 
-    if( (nyp-4)/nyprocs.lt.5 .or. nxpart) then
-       nyprocs=int(sqrt(real(pecount)))
-       nxprocs=pecount/nyprocs
-       do while (nyprocs*nxprocs .ne. pecount)
-          nyprocs=nyprocs+1
-          nxprocs=pecount/nyprocs
-       end do
-       if(nxprocs.gt.nyprocs)then
-          i=nxprocs
-          nxprocs=nyprocs
-          nyprocs=i
-       endif
-    endif
+      IF( (nyp-4)/nyprocs < 5 .OR. nxpart) THEN
+         nyprocs = int(sqrt(REAL(pecount)))
+         nxprocs = pecount/nyprocs
+         DO WHILE (nyprocs*nxprocs /= pecount)
+            nyprocs = nyprocs+1
+            nxprocs = pecount/nyprocs
+         END DO
+         IF(nxprocs > nyprocs)then
+            i = nxprocs
+            nxprocs = nyprocs
+            nyprocs = i
+         END IF
+      END IF
 
-    !ctvs    nxprocs=1
-    !ctvs    nyprocs=2
-    !
-    !   ranktable is the matrix having ranks of processes in x-y domain
-    !
+      !ctvs    nxprocs=1
+      !ctvs    nyprocs=2
+      !
+      !   ranktable is the matrix having ranks of processes in x-y domain
+      !
 
-    allocate(ranktable(-1:nxprocs,-1:nyprocs))
+      ALLOCATE(ranktable(-1:nxprocs,-1:nyprocs))
 
-    do i = -1, nxprocs
-       do j = -1, nyprocs
-          ranktable(i,j) = 0
-       enddo
-    enddo
-    irank = 0
-    do j = 0, nyprocs - 1
-       do i = 0, nxprocs - 1
-          ranktable(i,j) = irank
-          if (myid .eq. irank) THEN
-             wrxid = i
-             wryid = j
-          endif
-          irank = irank + 1
-       enddo
-    enddo
-    do i = 0, nxprocs - 1
-       ranktable(i, -1) = ranktable(i, nyprocs - 1)
-       ranktable(i, nyprocs) = ranktable(i, 0)
-    enddo
-    do j = 0, nyprocs-1
-       ranktable(-1, j) = ranktable(nxprocs - 1, j)
-       ranktable(nxprocs, j) = ranktable(0, j)
-    enddo
-    ranktable(-1,-1)=ranktable(nxprocs-1,nyprocs-1)
-    ranktable(nxprocs,nyprocs)=ranktable(0,0)
-    ranktable(-1,nyprocs)=ranktable(nxprocs-1,0)
-    ranktable(nxprocs,-1)=ranktable(0,nyprocs-1)
+      DO i = -1, nxprocs
+         DO j = -1, nyprocs
+            ranktable(i,j) = 0
+         END DO
+      END DO
+      irank = 0
+      DO j = 0, nyprocs-1
+         DO i = 0, nxprocs-1
+            ranktable(i,j) = irank
+            IF (myid == irank) THEN
+               wrxid = i
+               wryid = j
+            END IF
+            irank = irank + 1
+         END DO
+      END DO
+      DO i = 0, nxprocs-1
+         ranktable(i, -1) = ranktable(i, nyprocs - 1)
+         ranktable(i, nyprocs) = ranktable(i, 0)
+      END DO
+      DO j = 0, nyprocs-1
+         ranktable(-1, j) = ranktable(nxprocs - 1, j)
+         ranktable(nxprocs, j) = ranktable(0, j)
+      END DO
+      ranktable(-1,-1) = ranktable(nxprocs-1,nyprocs-1)
+      ranktable(nxprocs,nyprocs) = ranktable(0,0)
+      ranktable(-1,nyprocs) = ranktable(nxprocs-1,0)
+      ranktable(nxprocs,-1) = ranktable(0,nyprocs-1)
 
-    call mpi_comm_group(mpi_comm_world, worldgroup, ierror)
-    call mpi_group_incl(worldgroup, nxprocs,ranktable(0:nxprocs-1,wryid),&
-         xgroup,ierror)
-    call mpi_comm_create(mpi_comm_world, xgroup,xcomm,ierror)
-    call mpi_group_incl(worldgroup, nyprocs,ranktable(wrxid,0:nyprocs-1),&
-         ygroup,ierror)
-    call mpi_comm_create(mpi_comm_world, ygroup,ycomm,ierror)
+      CALL mpi_comm_group(mpi_comm_world, worldgroup, ierror)
+      CALL mpi_group_incl(worldgroup, nxprocs,ranktable(0:nxprocs-1,wryid),&
+                          xgroup,ierror)
+      CALL mpi_comm_create(mpi_comm_world, xgroup,xcomm,ierror)
+      CALL mpi_group_incl(worldgroup, nyprocs,ranktable(wrxid,0:nyprocs-1),&
+                          ygroup,ierror)
+      CALL mpi_comm_create(mpi_comm_world, ygroup,ycomm,ierror)
 
-    call mpi_comm_rank(xcomm,commxid,ierror)
-    call mpi_comm_rank(ycomm,commyid,ierror)
+      CALL mpi_comm_rank(xcomm,commxid,ierror)
+      CALL mpi_comm_rank(ycomm,commyid,ierror)
 
-    !
-    ! there are two boundary points in each direction
-    !
-    nxpg = nxp
-    nypg = nyp
-    nxp = (nxpg-4)/nxprocs + 4
-    nyp = (nypg-4)/nyprocs + 4
+      !
+      ! there are two boundary points in each direction
+      !
+      nxpg = nxp
+      nypg = nyp
+      nxp = (nxpg-4)/nxprocs + 4
+      nyp = (nypg-4)/nyprocs + 4
 
-    modx = modulo(nxpg-4,nxprocs)
-    mody = modulo(nypg-4,nyprocs)
-    !
-    ! offsets for each processor in x and y directons(nxp x nyp)
-    !
-    allocate(xoffset(0:nxprocs-1),yoffset(0:nyprocs-1))
+      modx = modulo(nxpg-4,nxprocs)
+      mody = modulo(nypg-4,nyprocs)
+      !
+      ! offsets for each processor in x and y directons(nxp x nyp)
+      !
+      ALLOCATE(xoffset(0:nxprocs-1),yoffset(0:nyprocs-1))
 
-    xoffset = 0
+      xoffset = 0
 
-    do j=1,nxprocs-1
-       if(j <= modx) then
-          nxpj = nxp+1
-       else
-          nxpj = nxp
-       endif
-       xoffset(j) = xoffset(j-1)+nxpj-4
-    enddo
+      DO j = 1, nxprocs-1
+         IF(j <= modx) THEN
+            nxpj = nxp+1
+         ELSE
+            nxpj = nxp
+         END IF
+         xoffset(j) = xoffset(j-1)+nxpj-4
+      END DO
 
-    yoffset = 0
+      yoffset = 0
 
-    do j=1,nyprocs-1
-       if(j <= mody) then
-          nypj = nyp+1
-       else
-          nypj = nyp
-       endif
-       yoffset(j) = yoffset(j-1)+nypj-4
-    enddo
+      DO j = 1, nyprocs-1
+         IF(j <= mody) THEN
+            nypj = nyp+1
+         ELSE
+            nypj = nyp
+         END IF
+         yoffset(j) = yoffset(j-1)+nypj-4
+      END DO
 
-    if (nxpg > 5 .and. nxp == 5) then
-       print *, 'ABORTING: Subdomain too finely discretized in x', nxpg, nxp
-       call mpi_abort(MPI_COMM_WORLD,0,ierror)
-    end if
+      IF (nxpg > 5 .AND. nxp == 5) THEN
+         PRINT *, 'ABORTING: Subdomain too finely discretized in x', nxpg, nxp
+         CALL mpi_abort(MPI_COMM_WORLD,0,ierror)
+      END IF
 
-    if (nypg > 5 .and. nyp == 5) then
-       print *, 'ABORTING: Subdomain too finely discretized in y', nypg, nyp
-       call mpi_abort(MPI_COMM_WORLD,0,ierror)
-    end if
+      IF (nypg > 5 .AND. nyp == 5) THEN
+         PRINT *, 'ABORTING: Subdomain too finely discretized in y', nypg, nyp
+         CALL mpi_abort(MPI_COMM_WORLD,0,ierror)
+      END IF
 
-    if(nxp.lt.5) then
-       print *, 'ABORT: X Horizontal domain size too small for ',nxprocs,    &
+      IF(nxp < 5) THEN
+         PRINT *, 'ABORT: X Horizontal domain size too small for ',nxprocs,    &
             ' processors.'
-       print *, '       Increase nyp to ',nxprocs*5, ' or run on ',nxpg/5, &
+         PRINT *, '       Increase nyp to ',nxprocs*5, ' or run on ',nxpg/5, &
             ' or fewer processors'
-       call mpi_abort(MPI_COMM_WORLD,0,ierror)
-    endif
-    if(nyp.lt.5) then
-       print *, 'ABORT: Y Horizontal domain size too small for ',nyprocs,    &
+         CALL mpi_abort(MPI_COMM_WORLD,0,ierror)
+      END IF
+      IF(nyp < 5) THEN
+         PRINT *, 'ABORT: Y Horizontal domain size too small for ',nyprocs,    &
             ' processors.'
-       print *, '       Increase nyp to ',nyprocs*5, ' or run on ',nypg/5, &
+         PRINT *, '       Increase nyp to ',nyprocs*5, ' or run on ',nypg/5, &
             ' or fewer processors'
-       call mpi_abort(MPI_COMM_WORLD,0,ierror)
-    endif
-
-    if (myid == 0) then
-       print 61, 'Processor count', pecount,'nxpl =', nxp,' nypl = ',nyp
-       do i=0,min(nxprocs,nyprocs)-1
-          print "(2x,A13,2I5)", 'x/y offset = ', xoffset(i), yoffset(i)
-       end do
-       if (nxprocs>nyprocs) print "(15x,I5)", xoffset(nyprocs:nxprocs-1)
-       if (nxprocs<nyprocs) print "(15x,I5)", yoffset(nxprocs:nyprocs-1)
-    end if
-
-61 format (/1x,49('-')/2x,A15,I5,2(A6,I5))
-
-  end subroutine define_decomp
-  !
-  !----------------------------------------------------------------------
-  ! INIT_ALLTOALL_REORDERXY: Defines the mpi derived types to do a data
-  ! movement of the form A(m,n/p,z) -> B(n,m/p,z) for data of type MY_CMPLX
-  !
-  subroutine init_alltoall_reorder(nxp,nyp,nzp)
-
-    integer, intent(in) :: nxp,nyp,nzp
-
-    integer :: nx, ny, i, j, k, ii, jj, ierr, cnt, typesize,nynzg, nxnzg
-
-    nx = max(1,nxp-4)
-    ny = max(1,nyp-4)
-    nxg=nxpg-4
-    nyg=nypg-4
-
-    allocate (nxpa(0:nxprocs-1), nypa(0:nyprocs-1))
-    allocate (nxnza(0:nyprocs-1), nynza(0:nxprocs-1))
-    allocate(xcount(0:nxprocs-1,2),xtype(0:nxprocs-1,2),xdisp(0:nxprocs-1,2))
-    allocate(ycount(0:nyprocs-1,2),ytype(0:nyprocs-1,2),ydisp(0:nyprocs-1,2))
-
-    ii = nxg/nxprocs
-    ii= nxg - nxprocs*ii
-
-    do i=0,nxprocs-1
-       nxpa(i)=nxg/nxprocs
-       if(i .lt. ii) nxpa(i)=nxpa(i)+1
-    enddo
-
-    jj = nyg/nyprocs
-    jj= nyg - nyprocs*jj
-
-    do i=0,nyprocs-1
-       nypa(i)=nyg/nyprocs
-       if(i .lt. jj) nypa(i)=nypa(i)+1
-    enddo
-
-    nynzg=ny*nzp
-    ii = nynzg/nxprocs
-    ii= nynzg - nxprocs*ii
-    do i=0,nxprocs-1
-       nynza(i) = nynzg/nxprocs
-       if (i .lt. ii) nynza(i)=nynza(i)+1
-    enddo
-
-    nxnzg=nx*nzp
-    jj = nxnzg/nyprocs
-    jj= nxnzg - nyprocs*jj
-    do i=0,nyprocs-1
-       nxnza(i) = nxnzg/nyprocs
-       if (i .lt. jj) nxnza(i)=nxnza(i)+1
-    enddo
-
-    nxnzp=nxnza(wryid)
-    nynzp=nynza(wrxid)
-
-
-    call MPI_TYPE_SIZE(MY_CMPLX,typesize, ierr)
-
-    xcount=1
-    ycount=1
-    xdisp=0
-    ydisp=0
-
-    do i=1,nxprocs-1
-       xdisp(i,1)=xdisp(i-1,1)+nx*nynza(i-1)*typesize
-       xdisp(i,2)=xdisp(i-1,2)+nxpa(i-1)*typesize
-    enddo
-
-    do i=1,nyprocs-1
-       ydisp(i,1)=ydisp(i-1,1)+ny*nxnza(i-1)*typesize
-       ydisp(i,2)=ydisp(i-1,2)+nypa(i-1)*typesize
-    enddo
-
-    do i=0,nxprocs-1
-       call mpi_type_contiguous(nx*nynza(i),MY_CMPLX, xtype(i,1),ierr)
-       call mpi_type_commit(xtype(i,1),ierr)
-       call mpi_type_vector(nynzp, nxpa(i), nxg, MY_CMPLX, xtype(i,2),ierr)
-       call mpi_type_commit(xtype(i,2),ierr)
-    enddo
-
-    do i=0,nyprocs-1
-       call mpi_type_contiguous(ny*nxnza(i),MY_CMPLX, ytype(i,1),ierr)
-       call mpi_type_commit(ytype(i,1),ierr)
-       call mpi_type_vector(nxnzp, nypa(i), nyg, MY_CMPLX, ytype(i,2),ierr)
-       call mpi_type_commit(ytype(i,2),ierr)
-    enddo
-
-    call MPI_TYPE_VECTOR(nyp-4,nzp*2,nxp*nzp,MY_SIZE,stridetype,ierr)
-    call MPI_TYPE_COMMIT(stridetype,ierr)
-    call MPI_TYPE_VECTOR(nyp-4,nzp*2,nxp*nzp,MY_SIZE,xstride,ierr)
-    call MPI_TYPE_COMMIT(xstride,ierr)
-    call MPI_TYPE_VECTOR(2,nzp*(nxp-4),nxp*nzp,MY_SIZE,ystride,ierr)
-    call MPI_TYPE_COMMIT(ystride,ierr)
-    call MPI_TYPE_VECTOR(2,2*nzp,nxp*nzp,MY_SIZE,xystride,ierr)
-    call MPI_TYPE_COMMIT(xystride,ierr)
-
-    call MPI_TYPE_VECTOR(nyp-4,nxp-4,nxpg-4,MY_SIZE,fxytype,ierr)
-    call MPI_TYPE_COMMIT(fxytype,ierr)
-
-    call MPI_TYPE_VECTOR(nyp-4,(nxp-4)*nzp,(nxpg-4)*nzp,MY_SIZE,fxyztype,ierr)
-    call MPI_TYPE_COMMIT(fxyztype,ierr)
-
-    call MPI_TYPE_VECTOR(nyp-4,nxp-4,nxp,MY_SIZE,xylarry,ierr)
-    call MPI_TYPE_COMMIT(xylarry,ierr)
-    call MPI_TYPE_VECTOR(nyp-4,(nxp-4)*nzp,nxp*nzp,MY_SIZE,xyzlarry,ierr)
-    call MPI_TYPE_COMMIT(xyzlarry,ierr)
-
-
-
-  end subroutine init_alltoall_reorder
-
-  ! ---------------------------------------------------------------------
-  ! subroutine cyclics: commits exchange cyclic x boundary conditions
-  !
-  subroutine cyclics(n1,n2,n3,var,req)
-
-    integer, intent(in) :: n1,n2,n3
-    real, intent(inout) :: var(n1,n2,n3)
-    integer req(16)
-    integer :: ierror, stats(MPI_STATUS_SIZE,16), pxfwd, pxback, pyfwd, pyback
-    integer :: pxyne,pxyse,pxynw,pxysw
-
-    if (nypg == 5) then
-       var(:,:,1) = var(:,:,3)
-       var(:,:,2) = var(:,:,3)
-       var(:,:,4) = var(:,:,3)
-       var(:,:,5) = var(:,:,3)
-    end if
-    if (nxpg == 5) then
-       var(:,1,:) = var(:,3,:)
-       var(:,2,:) = var(:,3,:)
-       var(:,4,:) = var(:,3,:)
-       var(:,5,:) = var(:,3,:)
-    end if
-
-    pxfwd = ranktable(wrxid+1,wryid)
-    pxback =ranktable(wrxid-1,wryid)
-    pyfwd = ranktable(wrxid,wryid+1)
-    pyback =ranktable(wrxid,wryid-1)
-
-    pxyne = ranktable(wrxid+1,wryid+1)
-    pxyse = ranktable(wrxid+1,wryid-1)
-    pxynw = ranktable(wrxid-1,wryid+1)
-    pxysw = ranktable(wrxid-1,wryid-1)
-
-    call mpi_isend(var(1,n2-3,3),1,xstride, pxfwd, 130, &
-         MPI_COMM_WORLD, req(1), ierror)
-    call mpi_isend(var(1,3,3), 1, xstride, pxback, 140, &
-         MPI_COMM_WORLD, req(2), ierror)
-    call mpi_irecv(var(1,n2-1,3), 1, xstride, pxfwd, 140, &
-         MPI_COMM_WORLD, req(3), ierror)
-    call mpi_irecv(var(1,1,3), 1, xstride, pxback, 130, &
-         MPI_COMM_WORLD, req(4), ierror)
-
-    call mpi_isend(var(1,3,3), 1, ystride, pyback, 110, &
-         MPI_COMM_WORLD, req(5), ierror)
-    call mpi_irecv(var(1,3,n3-1), 1, ystride, pyfwd, 110, &
-         MPI_COMM_WORLD, req(6), ierror)
-    call mpi_isend(var(1,3,n3-3), 1, ystride, pyfwd, 120, &
-         MPI_COMM_WORLD, req(7), ierror)
-    call mpi_irecv(var(1,3,1), 1, ystride, pyback, 120, &
-         MPI_COMM_WORLD, req(8), ierror)
-
-    call mpi_isend(var(1,n2-3,n3-3), 1, xystride, pxyne, 150, &
-         MPI_COMM_WORLD, req(9), ierror)
-    call mpi_irecv(var(1,1,1), 1, xystride, pxysw, 150, &
-         MPI_COMM_WORLD, req(10), ierror)
-    call mpi_isend(var(1,n2-3,3), 1, xystride, pxyse, 160, &
-         MPI_COMM_WORLD, req(11), ierror)
-    call mpi_irecv(var(1,1,n3-1), 1, xystride, pxynw, 160, &
-         MPI_COMM_WORLD, req(12), ierror)
-
-    call mpi_isend(var(1,3,n3-3), 1, xystride, pxynw, 170, &
-         MPI_COMM_WORLD, req(13), ierror)
-    call mpi_irecv(var(1,n2-1,1), 1, xystride, pxyse, 170, &
-         MPI_COMM_WORLD, req(14), ierror)
-    call mpi_isend(var(1,3,3), 1, xystride, pxysw, 180, &
-         MPI_COMM_WORLD, req(15), ierror)
-    call mpi_irecv(var(1,n2-1,n3-1), 1, xystride, pxyne, 180, &
-         MPI_COMM_WORLD, req(16), ierror)
-
-  end subroutine cyclics
-  !
-  !
-  ! ---------------------------------------------------------------------
-  ! subroutine cyclicc: comits excahnging cyclic boundary conditions
-  subroutine cyclicc(n1,n2,n3,var,req)
-
-    integer :: ierror, stats(MPI_STATUS_SIZE,16)
-    integer :: req(16),n1,n2,n3
-    real    :: var(n1,n2,n3)
-
-    call mpi_waitall(16,req,stats,ierror)
-
-  end subroutine cyclicc
-
-  subroutine appl_abort(apperr)
-
-    integer apperr,ierr
-    call mpi_abort(MPI_COMM_WORLD,apperr,ierr)
-
-  end subroutine appl_abort
-
-  subroutine appl_finalize(ierr)
-
-    integer ierr
-    call mpi_finalize(ierr)
-
-  end subroutine appl_finalize
-
-  subroutine xshuffle(a,atmp,nx,ny,nz,isign)
-  implicit none
-    integer, intent(in):: nx,ny,nz,isign
-    complex, intent(inout):: a(nx,ny,nz),atmp((nx+1)*(ny+1)*(nz+1))
-    integer ierr,ll,i,j,k
-
-    if(isign .eq. 1) then
-       if(nxprocs .ne. 1)then
-          call mpi_alltoallw( a,xcount(0 ,1) , xdisp(0 ,1), xtype(0 ,1), atmp, &
-               xcount(0 ,2), xdisp(0 ,2),xtype(0 ,2),xcomm,ierr)
-       else
-          ll=0
-          do k=1,nz
-             do j=1,ny
-                do i=1,nx
-                   ll=ll+1
-                   atmp(ll)=a(i,j,k)
-                enddo
-             enddo
-          enddo
-
-       endif
-    else
-       if(nxprocs .ne. 1)then
-          call mpi_alltoallw(atmp,xcount(0 ,2),xdisp(0 ,2),xtype(0 ,2),a, &
-               xcount(0 ,1), xdisp(0 ,1),xtype(0 ,1),xcomm,ierr)
-       else
-          ll=0
-          do k=1,nz
-             do j=1,ny
-                do i=1,nx
-                   ll=ll+1
-                   a(i,j,k)=atmp(ll)
-                enddo
-             enddo
-          enddo
-
-       endif
-    endif
-
-  end subroutine xshuffle
-
-  subroutine yshuffle(a,atmp,nx,ny,nz,isign)
-    implicit none
-    integer, intent(in):: nx,ny,nz,isign
-    complex, intent(inout):: a(ny,nx,nz),atmp((nx+1)*(ny+1)*(nz+1))
-    integer ierr,ll,i,j,k
-
-    if(isign .eq. 1) then
-       if(nyprocs .ne. 1)then
-          call mpi_alltoallw( a,ycount(0 ,1),ydisp(0 ,1),ytype(0 ,1),atmp, &
-               ycount(0 ,2),ydisp(0 ,2),ytype(0 ,2),ycomm,ierr)
-       else
-          ll=0
-          do k=1,nz
-             do j=1,ny
-                do i=1,nx
-                   ll=ll+1
-                   atmp(ll)=a(i,j,k)
-                enddo
-             enddo
-          enddo
-       endif
-    else
-       if(nyprocs .ne. 1)then
-          call mpi_alltoallw(atmp,ycount(0 ,2),ydisp(0 ,2),ytype(0 ,2),a, &
-               ycount(0,1),ydisp(0,1),ytype(0,1),ycomm,ierr)
-       else
-          ll=0
-          do k=1,nz
-             do j=1,ny
-                do i=1,nx
-                   ll=ll+1
-                   a(i,j,k)=atmp(ll)
-                enddo
-             enddo
-          enddo
-
-       endif
-    endif
-
-  end subroutine yshuffle
-  !
-  !---------------------------------------------------------------------------
-  ! get maximum across processors
-  !
-  subroutine real_scalar_par_max(rxl,xxg)
-
-    real, intent(in) :: rxl
-    real(kind=8), intent(out) :: xxg
-    real(kind=8) :: xxl
-    integer:: mpiop,ierror
-
-    xxl = rxl
-
-    call mpi_allreduce(xxl,xxg,1,MPI_DOUBLE_PRECISION, MPI_MAX, &
-         MPI_COMM_WORLD, ierror)
-
-  end subroutine real_scalar_par_max
-
-  subroutine double_scalar_par_max(xxl,xxg)
-
-    real(kind=8), intent(out) :: xxg
-    real(kind=8), intent(in) :: xxl
-    integer:: mpiop,ierror
-
-
-    call mpi_allreduce(xxl,xxg,1,MPI_DOUBLE_PRECISION, MPI_MAX, &
-         MPI_COMM_WORLD, ierror)
-
-  end subroutine double_scalar_par_max
-
-  subroutine double_scalar_par_min(xxl,xxg)
-
-    real(kind=8), intent(out) :: xxg
-    real(kind=8), intent(in) :: xxl
-    integer:: mpiop,ierror
-
-
-    call mpi_allreduce(xxl,xxg,1,MPI_DOUBLE_PRECISION, MPI_MIN, &
-         MPI_COMM_WORLD, ierror)
-
-  end subroutine double_scalar_par_min
-
-  subroutine double_scalar_par_sum(xxl,xxg)
-
-    real(kind=8), intent(out) :: xxg
-    real(kind=8), intent(in) :: xxl
-    integer:: mpiop,ierror
-
-
-    call mpi_allreduce(xxl,xxg,1,MPI_DOUBLE_PRECISION, MPI_SUM, &
-         MPI_COMM_WORLD, ierror)
-
-  end subroutine double_scalar_par_sum
-
-  subroutine double_array_par_sum(xxl,xxg,n)
-
-    integer, intent(in)::n
-    real(kind=8), intent(out) :: xxg(n)
-    real(kind=8), intent(in) :: xxl(n)
-    integer:: mpiop,ierror
-
-
-    call mpi_allreduce(xxl,xxg,n,MPI_DOUBLE_PRECISION, MPI_SUM, &
-         MPI_COMM_WORLD, ierror)
-
-  end subroutine double_array_par_sum
-  subroutine broadcast(val, procsend)
-   integer, intent(in) :: procsend
-   real(kind=8), intent(inout) :: val
-   integer :: ierror
-   call mpi_bcast(val, 1, mpi_double_precision, procsend, mpi_comm_world, ierror)
-  end subroutine broadcast
-  subroutine broadcast_dbl(val, procsend)
-   integer, intent(in) :: procsend
-   double precision, intent(inout) :: val
-   integer :: ierror
-   call mpi_bcast(val, 1, mpi_double_precision, procsend, mpi_comm_world, ierror)
-  end subroutine broadcast_dbl
-  subroutine mpi_get_time(val)
-   double precision, intent(out) :: val
-          val = MPI_Wtime()
-  end subroutine mpi_get_time
-
-
-end module mpi_interface
+         CALL mpi_abort(MPI_COMM_WORLD,0,ierror)
+      END IF
+
+      IF (myid == 0) THEN
+         PRINT 61, 'Processor count', pecount,'nxpl =', nxp,' nypl = ',nyp
+
+         DO i = 0, min(nxprocs,nyprocs)-1
+            PRINT "(2x,A13,2I5)", 'x/y offset = ', xoffset(i), yoffset(i)
+         END DO
+
+         IF (nxprocs > nyprocs) PRINT "(15x,I5)", xoffset(nyprocs:nxprocs-1)
+         IF (nxprocs < nyprocs) PRINT "(15x,I5)", yoffset(nxprocs:nyprocs-1)
+      END IF
+
+61    FORMAT (/1x,49('-')/2x,A15,I5,2(A6,I5))
+
+   END SUBROUTINE define_decomp
+   !
+   !----------------------------------------------------------------------
+   ! INIT_ALLTOALL_REORDERXY: Defines the mpi derived types to do a data
+   ! movement of the form A(m,n/p,z) -> B(n,m/p,z) for data of type CMPLX_SIZE
+   !
+   SUBROUTINE init_alltoall_reorder(nxp,nyp,nzp)
+
+      INTEGER, INTENT(in) :: nxp,nyp,nzp
+
+      INTEGER :: nx, ny, i, j, k, ii, jj, ierr, cnt, typesize,nynzg, nxnzg
+
+      nx  = max(1,nxp-4)
+      ny  = max(1,nyp-4)
+      nxg = nxpg-4
+      nyg = nypg-4
+
+      ALLOCATE(nxpa(0:nxprocs-1), nypa(0:nyprocs-1))
+      ALLOCATE(nxnza(0:nyprocs-1), nynza(0:nxprocs-1))
+      ALLOCATE(xcount(0:nxprocs-1,2),xtype(0:nxprocs-1,2),xdisp(0:nxprocs-1,2))
+      ALLOCATE(ycount(0:nyprocs-1,2),ytype(0:nyprocs-1,2),ydisp(0:nyprocs-1,2))
+
+      ii = nxg/nxprocs
+      ii = nxg - nxprocs*ii
+
+      DO i = 0, nxprocs-1
+         nxpa(i) = nxg/nxprocs
+         IF(i < ii) nxpa(i) = nxpa(i)+1
+      END DO
+
+      jj = nyg/nyprocs
+      jj = nyg - nyprocs*jj
+
+      DO i = 0, nyprocs-1
+         nypa(i) = nyg/nyprocs
+         IF(i < jj) nypa(i) = nypa(i)+1
+      END DO
+
+      nynzg = ny*nzp
+      ii = nynzg/nxprocs
+      ii = nynzg - nxprocs*ii
+      DO i = 0, nxprocs-1
+         nynza(i) = nynzg/nxprocs
+         IF (i < ii) nynza(i) = nynza(i)+1
+      END DO
+
+      nxnzg = nx*nzp
+      jj = nxnzg/nyprocs
+      jj = nxnzg - nyprocs*jj
+      DO i = 0, nyprocs-1
+         nxnza(i) = nxnzg/nyprocs
+         IF (i < jj) nxnza(i) = nxnza(i)+1
+      END DO
+
+      nxnzp = nxnza(wryid)
+      nynzp = nynza(wrxid)
+
+      CALL MPI_TYPE_SIZE(MY_CMPLX,typesize, ierr)
+
+      xcount = 1
+      ycount = 1
+      xdisp = 0
+      ydisp = 0
+
+      DO i = 1, nxprocs-1
+         xdisp(i,1) = xdisp(i-1,1)+nx*nynza(i-1)*typesize
+         xdisp(i,2) = xdisp(i-1,2)+nxpa(i-1)*typesize
+      END DO
+
+      DO i = 1, nyprocs-1
+         ydisp(i,1) = ydisp(i-1,1)+ny*nxnza(i-1)*typesize
+         ydisp(i,2) = ydisp(i-1,2)+nypa(i-1)*typesize
+      END DO
+
+      DO i = 0, nxprocs-1
+         CALL mpi_type_contiguous(nx*nynza(i),MY_CMPLX, xtype(i,1),ierr)
+         CALL mpi_type_commit(xtype(i,1),ierr)
+         CALL mpi_type_vector(nynzp, nxpa(i), nxg, MY_CMPLX, xtype(i,2),ierr)
+         CALL mpi_type_commit(xtype(i,2),ierr)
+      END DO
+
+      DO i = 0, nyprocs-1
+         CALL mpi_type_contiguous(ny*nxnza(i),MY_CMPLX, ytype(i,1),ierr)
+         CALL mpi_type_commit(ytype(i,1),ierr)
+         CALL mpi_type_vector(nxnzp, nypa(i), nyg, MY_CMPLX, ytype(i,2),ierr)
+         CALL mpi_type_commit(ytype(i,2),ierr)
+      END DO
+
+      CALL MPI_TYPE_VECTOR(nyp-4,nzp*2,nxp*nzp,MY_REAL,stridetype,ierr)
+      CALL MPI_TYPE_COMMIT(stridetype,ierr)
+      CALL MPI_TYPE_VECTOR(nyp-4,nzp*2,nxp*nzp,MY_REAL,xstride,ierr)
+      CALL MPI_TYPE_COMMIT(xstride,ierr)
+      CALL MPI_TYPE_VECTOR(2,nzp*(nxp-4),nxp*nzp,MY_REAL,ystride,ierr)
+      CALL MPI_TYPE_COMMIT(ystride,ierr)
+      CALL MPI_TYPE_VECTOR(2,2*nzp,nxp*nzp,MY_REAL,xystride,ierr)
+      CALL MPI_TYPE_COMMIT(xystride,ierr)
+
+      CALL MPI_TYPE_VECTOR(nyp-4,nxp-4,nxpg-4,MY_REAL,fxytype,ierr)
+      CALL MPI_TYPE_COMMIT(fxytype,ierr)
+
+      CALL MPI_TYPE_VECTOR(nyp-4,(nxp-4)*nzp,(nxpg-4)*nzp,MY_REAL,fxyztype,ierr)
+      CALL MPI_TYPE_COMMIT(fxyztype,ierr)
+
+      CALL MPI_TYPE_VECTOR(nyp-4,nxp-4,nxp,MY_REAL,xylarry,ierr)
+      CALL MPI_TYPE_COMMIT(xylarry,ierr)
+      CALL MPI_TYPE_VECTOR(nyp-4,(nxp-4)*nzp,nxp*nzp,MY_REAL,xyzlarry,ierr)
+      CALL MPI_TYPE_COMMIT(xyzlarry,ierr)
+
+   END SUBROUTINE init_alltoall_reorder
+
+   ! ---------------------------------------------------------------------
+   ! Subroutine cyclics: commits exchange cyclic x boundary conditions
+   !
+   SUBROUTINE cyclics(n1,n2,n3,var,req)
+
+      INTEGER, INTENT(in) :: n1,n2,n3
+      REAL, INTENT(inout) :: var(n1,n2,n3)
+      INTEGER :: req(16)
+      INTEGER :: ierror, stats(MPI_STATUS_SIZE,16), pxfwd, pxback, pyfwd, pyback
+      INTEGER :: pxyne,pxyse,pxynw,pxysw
+
+      IF (nypg == 5) THEN
+         var(:,:,1) = var(:,:,3)
+         var(:,:,2) = var(:,:,3)
+         var(:,:,4) = var(:,:,3)
+         var(:,:,5) = var(:,:,3)
+      END IF
+      IF (nxpg == 5) THEN
+         var(:,1,:) = var(:,3,:)
+         var(:,2,:) = var(:,3,:)
+         var(:,4,:) = var(:,3,:)
+         var(:,5,:) = var(:,3,:)
+      END IF
+
+      pxfwd  = ranktable(wrxid+1,wryid)
+      pxback = ranktable(wrxid-1,wryid)
+      pyfwd  = ranktable(wrxid,wryid+1)
+      pyback = ranktable(wrxid,wryid-1)
+
+      pxyne = ranktable(wrxid+1,wryid+1)
+      pxyse = ranktable(wrxid+1,wryid-1)
+      pxynw = ranktable(wrxid-1,wryid+1)
+      pxysw = ranktable(wrxid-1,wryid-1)
+
+      CALL mpi_isend(var(1,n2-3,3),1,xstride, pxfwd, 130, &
+                     MPI_COMM_WORLD, req(1), ierror)
+      CALL mpi_isend(var(1,3,3), 1, xstride, pxback, 140, &
+                     MPI_COMM_WORLD, req(2), ierror)
+      CALL mpi_irecv(var(1,n2-1,3), 1, xstride, pxfwd, 140, &
+                     MPI_COMM_WORLD, req(3), ierror)
+      CALL mpi_irecv(var(1,1,3), 1, xstride, pxback, 130, &
+                     MPI_COMM_WORLD, req(4), ierror)
+
+      CALL mpi_isend(var(1,3,3), 1, ystride, pyback, 110, &
+                     MPI_COMM_WORLD, req(5), ierror)
+      CALL mpi_irecv(var(1,3,n3-1), 1, ystride, pyfwd, 110, &
+                     MPI_COMM_WORLD, req(6), ierror)
+      CALL mpi_isend(var(1,3,n3-3), 1, ystride, pyfwd, 120, &
+                     MPI_COMM_WORLD, req(7), ierror)
+      CALL mpi_irecv(var(1,3,1), 1, ystride, pyback, 120, &
+                     MPI_COMM_WORLD, req(8), ierror)
+
+      CALL mpi_isend(var(1,n2-3,n3-3), 1, xystride, pxyne, 150, &
+                     MPI_COMM_WORLD, req(9), ierror)
+      CALL mpi_irecv(var(1,1,1), 1, xystride, pxysw, 150, &
+                     MPI_COMM_WORLD, req(10), ierror)
+      CALL mpi_isend(var(1,n2-3,3), 1, xystride, pxyse, 160, &
+                     MPI_COMM_WORLD, req(11), ierror)
+      CALL mpi_irecv(var(1,1,n3-1), 1, xystride, pxynw, 160, &
+                     MPI_COMM_WORLD, req(12), ierror)
+
+      CALL mpi_isend(var(1,3,n3-3), 1, xystride, pxynw, 170, &
+                     MPI_COMM_WORLD, req(13), ierror)
+      CALL mpi_irecv(var(1,n2-1,1), 1, xystride, pxyse, 170, &
+                     MPI_COMM_WORLD, req(14), ierror)
+      CALL mpi_isend(var(1,3,3), 1, xystride, pxysw, 180, &
+                     MPI_COMM_WORLD, req(15), ierror)
+      CALL mpi_irecv(var(1,n2-1,n3-1), 1, xystride, pxyne, 180, &
+                     MPI_COMM_WORLD, req(16), ierror)
+
+   END SUBROUTINE cyclics
+   !
+   !
+   ! ---------------------------------------------------------------------
+   ! Subroutine cyclicc: comits excahnging cyclic boundary conditions
+   SUBROUTINE cyclicc(n1,n2,n3,var,req)
+
+      INTEGER :: ierror, stats(MPI_STATUS_SIZE,16)
+      INTEGER :: req(16),n1,n2,n3
+      REAL    :: var(n1,n2,n3)
+
+      CALL mpi_waitall(16,req,stats,ierror)
+
+   END SUBROUTINE cyclicc
+
+   SUBROUTINE appl_abort(apperr)
+
+      INTEGER :: apperr,ierr
+      CALL mpi_abort(MPI_COMM_WORLD,apperr,ierr)
+
+   END SUBROUTINE appl_abort
+
+   SUBROUTINE appl_finalize(ierr)
+
+      INTEGER :: ierr
+      CALL mpi_finalize(ierr)
+
+   END SUBROUTINE appl_finalize
+
+   SUBROUTINE xshuffle(a,atmp,nx,ny,nz,isign)
+
+      INTEGER, INTENT(in)    :: nx,ny,nz,isign
+      COMPLEX, INTENT(inout) :: a(nx,ny,nz),atmp((nx+1)*(ny+1)*(nz+1))
+      INTEGER :: ierr,ll,i,j,k
+
+      IF(isign == 1) THEN
+         IF(nxprocs /= 1)then
+            CALL mpi_alltoallw( a,xcount(0:,1) , xdisp(0:,1), xtype(0:,1), atmp, &
+                                xcount(0:,2), xdisp(0:,2),xtype(0:,2),xcomm,ierr)
+         ELSE
+            ll = 0
+            DO k = 1, nz
+               DO j = 1, ny
+                  DO i = 1, nx
+                     ll = ll+1
+                     atmp(ll) = a(i,j,k)
+                  END DO
+               END DO
+            END DO
+
+         END IF
+      ELSE
+         IF(nxprocs /= 1)then
+            CALL mpi_alltoallw(atmp,xcount(0:,2),xdisp(0:,2),xtype(0:,2),a, &
+                               xcount(0:,1), xdisp(0:,1),xtype(0:,1),xcomm,ierr)
+         ELSE
+            ll = 0
+            DO k = 1, nz
+               DO j = 1, ny
+                  DO i = 1, nx
+                     ll = ll+1
+                     a(i,j,k) = atmp(ll)
+                  END DO
+               END DO
+            END DO
+
+         END IF
+      END IF
+
+   END SUBROUTINE xshuffle
+
+   SUBROUTINE yshuffle(a,atmp,nx,ny,nz,isign)
+
+      INTEGER, INTENT(in)    :: nx,ny,nz,isign
+      COMPLEX, INTENT(inout) :: a(ny,nx,nz),atmp((nx+1)*(ny+1)*(nz+1))
+      INTEGER :: ierr,ll,i,j,k
+
+      IF(isign == 1) THEN
+         IF(nyprocs /= 1)then
+            CALL mpi_alltoallw( a,ycount(0:,1),ydisp(0:,1),ytype(0:,1),atmp, &
+                                ycount(0:,2),ydisp(0:,2),ytype(0:,2),ycomm,ierr)
+         ELSE
+            ll = 0
+            DO k = 1, nz
+               DO j = 1, ny
+                  DO i = 1, nx
+                     ll = ll+1
+                     atmp(ll) = a(j,i,k)  ! Fixed i & j
+                  END DO
+               END DO
+            END DO
+         END IF
+      ELSE
+         IF(nyprocs /= 1)then
+            CALL mpi_alltoallw(atmp,ycount(0:,2),ydisp(0:,2),ytype(0:,2),a, &
+               ycount(0:,1),ydisp(0:,1),ytype(0:,1),ycomm,ierr)
+         ELSE
+            ll = 0
+            DO k = 1, nz
+               DO j = 1, ny
+                  DO i = 1, nx
+                     ll = ll+1
+                     a(j,i,k) = atmp(ll)
+                  END DO
+               END DO
+            END DO
+
+         END IF
+      END IF
+
+    END SUBROUTINE yshuffle
+    
+    !
+    ! -------------------------------------------------------------------------
+    ! SUBROUTINE get_scalar_global_max_root
+    ! Get the global maximum across processes for a single scalar. The value is
+    ! stored only for the root process!
+    ! 
+    SUBROUTINE get_scalar_integer_global_max_root(lmax,gmax)
+      REAL, INTENT(in) :: lmax
+      REAL, INTENT(out) :: gmax
+      INTEGER :: ierr
+      gmax = 0.
+      CALL MPI_REDUCE(lmax,gmax,1,MY_REAL,MPI_MAX,    &
+                      mpiroot,MPI_COMM_WORLD,ierr    )      
+    END SUBROUTINE get_scalar_integer_global_max_root
+
+    !
+    ! --------------------------------------------------------------------
+    ! SUBROUTINE get_scalar_global_sum_root   
+    ! Get the sum across processes for a single float scalar. The value
+    ! is stored only for the root process!
+    SUBROUTINE get_scalar_float_global_sum_root(lsum,gsum)
+      REAL, INTENT(in) :: lsum
+      REAL, INTENT(out) :: gsum
+      INTEGER :: ierr
+      gsum = 0.
+      CALL MPI_REDUCE(lsum,gsum,1,MY_REAL,MPI_SUM,       &
+                      mpiroot,MPI_COMM_WORLD,ierr)
+    END SUBROUTINE get_scalar_float_global_sum_root
+    ! --------------------------------------
+    ! SAme for integer
+    SUBROUTINE get_scalar_integer_global_sum_root(lsum,gsum)
+      INTEGER, INTENT(in) :: lsum
+      INTEGER, INTENT(out) :: gsum
+      INTEGER :: ierr
+      gsum = 0
+      CALL MPI_REDUCE(lsum,gsum,1,MPI_INTEGER,MPI_SUM,        &
+                      mpiroot,MPI_COMM_WORLD,ierr)
+    END SUBROUTINE get_scalar_integer_global_sum_root
+    !
+    ! ------------------------------------------------------------------------
+    ! SUBROUTINE get_1d_global_sum_root(lsum,gsum)
+    ! Get the sum across all processes for a 1 dimensional float array. The values
+    ! are stored only for the root process
+    SUBROUTINE get_1d_float_global_sum_root(n,lsum,gsum)
+      INTEGER, INTENT(in) :: n
+      REAL, INTENT(in) :: lsum(n)
+      REAL, INTENT(out) :: gsum(n)
+      INTEGER :: ierr
+      gsum = 0.
+      CALL MPI_REDUCE(lsum,gsum,n,MY_REAL,MPI_SUM,      &
+                      mpiroot,MPI_COMM_WORLD,ierr)
+    END SUBROUTINE get_1d_float_global_sum_root    
+    ! -------------------------------------------------
+    ! Same for integer
+    SUBROUTINE get_1d_integer_global_sum_root(n,lsum,gsum)
+      INTEGER, INTENT(in) :: n
+      INTEGER, INTENT(in) :: lsum(n)
+      INTEGER, INTENT(out) :: gsum(n)
+      INTEGER :: ierr
+      gsum = 0
+      CALL MPI_REDUCE(lsum,gsum,n,MPI_INTEGER,MPI_SUM,       &
+                      mpiroot,MPI_COMM_WORLD,ierr)
+    END SUBROUTINE get_1d_integer_global_sum_root
+    !
+    !-----------------------------------------------------------------------------
+    ! SUBROUTINE get_2d_global_sum_root(lsum,gsum)
+    ! Get the sum aross all processes for a 2 dimensional float array. The values
+    ! are stored only for the root process
+    SUBROUTINE get_2d_float_global_sum_root(n1,n2,lsum,gsum)
+      INTEGER, INTENT(in) :: n1,n2
+      REAL, INTENT(in) :: lsum(n1,n2)
+      REAL, INTENT(out) :: gsum(n1,n2)
+      REAL :: lbuff(n1*n2),gbuff(n1*n2)
+      INTEGER :: ierr
+      gsum = 0.; lbuff = 0.; gbuff = 0.
+      lbuff = RESHAPE(lsum,[n1*n2])
+      CALL MPI_REDUCE(lbuff,gbuff,n1*n2,MY_REAL,MPI_SUM,    &
+                      mpiroot,MPI_COMM_WORLD,ierr)
+      gsum = RESHAPE(gbuff,[n1,n2])
+    END SUBROUTINE get_2d_float_global_sum_root
+        
+   !
+   !---------------------------------------------------------------------------
+   ! get maximum across processors
+   !
+   SUBROUTINE double_scalar_par_max(xxl,xxg)
+
+      REAL(kind=8), INTENT(out) :: xxg
+      REAL(kind=8), INTENT(in)  :: xxl
+      INTEGER :: mpiop,ierror
+
+
+      CALL mpi_allreduce(xxl,xxg,1,MPI_DOUBLE_PRECISION, MPI_MAX, &
+                         MPI_COMM_WORLD, ierror)
+
+   END SUBROUTINE double_scalar_par_max
+
+
+   SUBROUTINE double_scalar_par_sum(xxl,xxg)
+
+      REAL(kind=8), INTENT(out) :: xxg
+      REAL(kind=8), INTENT(in)  :: xxl
+      INTEGER :: mpiop,ierror
+
+
+      CALL mpi_allreduce(xxl,xxg,1,MPI_DOUBLE_PRECISION, MPI_SUM, &
+                         MPI_COMM_WORLD, ierror)
+
+   END SUBROUTINE double_scalar_par_sum
+
+   SUBROUTINE double_array_par_sum(xxl,xxg,n)
+
+      INTEGER, INTENT(in) :: n
+      REAL(kind=8), INTENT(out) :: xxg(n)
+      REAL(kind=8), INTENT(in)  :: xxl(n)
+      INTEGER :: mpiop,ierror
+
+
+      CALL mpi_allreduce(xxl,xxg,n,MPI_DOUBLE_PRECISION, MPI_SUM, &
+                         MPI_COMM_WORLD, ierror)
+
+   END SUBROUTINE double_array_par_sum
+
+ ! Juha added: Broadcast real arrays and stuff (Need interface to cover everything!)
+ SUBROUTINE broadcastRealArray1d(NNdims,rootid,sendbuff)
+   IMPLICIT NONE
+   
+   INTEGER, INTENT(in) :: NNdims(1)
+   INTEGER, INTENT(in) :: rootid
+   REAL, INTENT(inout) :: sendbuff(NNdims(1))
+   INTEGER :: ierror
+
+   CALL MPI_BCAST(sendbuff,NNdims(1),MPI_DOUBLE_PRECISION,rootid,MPI_COMM_WORLD,ierror)
+
+ END SUBROUTINE broadcastRealArray1d
+ 
+ SUBROUTINE broadcastRealArray3d(NNdims,rootid,sendbuff)
+   IMPLICIT NONE
+
+   INTEGER, INTENT(in) :: NNdims(3)
+   INTEGER, INTENT(in) :: rootid
+   REAL, INTENT(inout) :: sendbuff(NNdims(1),NNdims(2),NNdims(3))
+   INTEGER :: NNtot
+   INTEGER :: ierror
+
+   REAL, ALLOCATABLE :: buff1d(:)
+
+   NNtot = NNdims(1)*NNdims(2)*NNdims(3)
+   IF (myid /= rootid) sendbuff = 0.
+
+   ALLOCATE(buff1d(NNtot))
+   IF (myid == 0) THEN
+      buff1d = RESHAPE(sendbuff,(/NNtot/))
+   ELSE
+      buff1d = 0.
+   END IF
+
+   CALL MPI_BCAST(buff1d,NNtot,MPI_DOUBLE_PRECISION,rootid,MPI_COMM_WORLD,ierror)
+  
+   sendbuff = RESHAPE(buff1d,NNdims)
+   DEALLOCATE(buff1d)
+
+
+ END SUBROUTINE broadcastRealArray3d
+
+ SUBROUTINE broadcastInteger(sendbuff,rootid)
+   IMPLICIT NONE
+
+   INTEGER, INTENT(inout) :: sendbuff
+   INTEGER, INTENT(in) :: rootid
+   INTEGER :: ierror
+
+   CALL MPI_BCAST(sendbuff,1,MPI_INTEGER,rootid,MPI_COMM_WORLD,ierror)
+
+
+ END SUBROUTINE broadcastInteger
+
+
+
+
+END MODULE mpi_interface
