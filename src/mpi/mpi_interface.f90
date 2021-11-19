@@ -830,6 +830,13 @@ CONTAINS
           val = MPI_Wtime()
  end subroutine mpi_get_time
 
+ subroutine broadcast_dbl(val, procsend)
+   integer, intent(in) :: procsend
+   double precision, intent(inout) :: val
+   integer :: ierror
+   call mpi_bcast(val, 1, mpi_double_precision, procsend, mpi_comm_world, ierror)
+ end subroutine broadcast_dbl
+
 
 
 
