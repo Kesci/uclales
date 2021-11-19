@@ -732,6 +732,18 @@ CONTAINS
 
    END SUBROUTINE double_scalar_par_max
 
+   SUBROUTINE double_scalar_par_min(xxl,xxg)
+
+      REAL(kind=8), INTENT(out) :: xxg
+      REAL(kind=8), INTENT(in)  :: xxl
+      INTEGER :: mpiop,ierror
+
+
+      CALL mpi_allreduce(xxl,xxg,1,MPI_DOUBLE_PRECISION, MPI_MIN, &
+                         MPI_COMM_WORLD, ierror)
+
+   END SUBROUTINE double_scalar_par_min
+
 
    SUBROUTINE double_scalar_par_sum(xxl,xxg)
 
