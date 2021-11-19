@@ -825,6 +825,12 @@ CONTAINS
 
  END SUBROUTINE broadcastInteger
 
+ subroutine mpi_get_time(val)
+   double precision, intent(out) :: val
+          val = MPI_Wtime()
+ end subroutine mpi_get_time
+
+
 
 
 
