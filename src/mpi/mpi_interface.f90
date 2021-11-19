@@ -79,6 +79,7 @@ MODULE mpi_interface
    CHARACTER(len=80) :: ver='', author=''
    ! Additional, e.g. case specific, information
    CHARACTER(len=180), PARAMETER :: info=''
+   INTEGER :: ierror
 
 CONTAINS
    !
