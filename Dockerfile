@@ -2,6 +2,8 @@ FROM ubuntu:latest
 
 MAINTAINER Widget_An <anchunyu@heywhale.com>
 
+ENV TZ=Asia/Shanghai
+
 RUN apt-get update && apt-get -y upgrade && apt-get autoremove && apt-get autoclean
 RUN apt-get -y install apt-utils build-essential libc6-dev zlib1g-dev libssl-dev gfortran libnetcdf-dev libnetcdff-dev
 
