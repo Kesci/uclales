@@ -1,6 +1,7 @@
 FROM ubuntu:latest
 
 MAINTAINER Widget_An <anchunyu@heywhale.com>
+
 ARG DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Shanghai
 
