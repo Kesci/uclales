@@ -3,7 +3,7 @@ FROM ubuntu:latest
 MAINTAINER Widget_An <anchunyu@heywhale.com>
 
 RUN apt-get update && apt-get -y upgrade && apt-get autoremove && apt-get autoclean
-RUN apt-get -y install apt-utils ubuild-essential libc6-dev zlib1g-dev libssl-dev gfortran libnetcdf-dev libnetcdff-dev
+RUN apt-get -y install apt-utils build-essential libc6-dev zlib1g-dev libssl-dev gfortran libnetcdf-dev libnetcdff-dev
 
 RUN wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.1.tar.gz && tar zxvf openmpi-4.1.1.tar.gz && rm openmpi-4.1.1.tar.gz
 RUN mkdir openmpi && cd openmpi-4.1.1 && ./configure --prefix=/openmpi/.local/openmpi CC=gcc CXX=g++ FC=gfortran && make -j && make install
