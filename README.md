@@ -22,7 +22,7 @@ cd openmpi-4.1.1
 ./configure --prefix=$HOME/.local/openmpi CC=gcc CXX=g++ FC=gfortran
 make -j
 make install
-MPI_HOME=/usr/local/openmpi
+MPI_HOME=$HOME/.local/openmpi
 export PATH=${MPI_HOME}/bin:$PATH
 export LD_LIBRARY_PATH=${MPI_HOME}/lib:$LD_LIBRARY_PATH
 export MANPATH=${MPI_HOME}/share/man:$MANPATH
