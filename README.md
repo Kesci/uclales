@@ -34,4 +34,21 @@ mkdir build && cd build
 cmake -D CMAKE_BUILD_TYPE=RELEASE ..
 make -j
 
+cp uclales ../bin/
+
+```
+
+## 使用方法
+将数据拷贝至 `${安装目录}/uclales/bin/` 下执行
+
+```shell
+./ucales
+```
+
+## Docker
+构建本地镜像方法
+```shell
+git clone https://github.com/WidgetA/uclales.git
+cd uclales
+docker build -t uclales ./
 ```
