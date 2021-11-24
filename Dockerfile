@@ -17,5 +17,5 @@ ENV LD_LIBRARY_PATH ${MPI_HOME}/lib:$LD_LIBRARY_PATH
 ENV MANPATH ${MPI_HOME}/share/man:$MANPATH
 
 RUN cd / && git clone https://github.com/WidgetA/uclales.git && cd uclales/config && cp ubuntu.cmake default.cmake
-RUN cd .. && mkdir build && cd build && cmake -D CMAKE_BUILD_TYPE=RELEASE .. && make -j
+RUN cd /uclales && mkdir build && cd build && cmake -D CMAKE_BUILD_TYPE=RELEASE .. && make -j
 RUN cp uclales ../bin/
