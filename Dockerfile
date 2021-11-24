@@ -18,4 +18,4 @@ ENV MANPATH ${MPI_HOME}/share/man:$MANPATH
 
 RUN cd / && git clone https://github.com/WidgetA/uclales.git && cd uclales/config && cp ubuntu.cmake default.cmake
 RUN cd /uclales && mkdir build && cd build && cmake -D CMAKE_BUILD_TYPE=RELEASE .. && make -j
-RUN cp uclales ../bin/
+RUN cp uclales/build/uclales uclales/bin/
