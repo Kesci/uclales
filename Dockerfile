@@ -1,7 +1,7 @@
 FROM ubuntu:latest
 
 MAINTAINER Widget_An <anchunyu@heywhale.com>
-
+ARG DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Shanghai
 
 RUN apt-get update && apt-get -y upgrade && apt-get autoremove && apt-get autoclean
