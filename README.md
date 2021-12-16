@@ -27,7 +27,7 @@ export PATH=${MPI_HOME}/bin:$PATH
 export LD_LIBRARY_PATH=${MPI_HOME}/lib:$LD_LIBRARY_PATH
 export MANPATH=${MPI_HOME}/share/man:$MANPATH
 
-git clone https://github.com/WidgetA/uclales.git
+cd ~ && git clone https://github.com/WidgetA/uclales.git
 cd uclales/config && cp ubuntu.cmake default.cmake
 cd ..
 mkdir build && cd build
